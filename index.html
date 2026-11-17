@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="de-AT">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Tobias Kröll · Portfolio</title>
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="theme-color" content="#000000">
+  <script>document.documentElement.classList.add("js")</script>
+  <link rel="preload" href="assets/fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css?v=37d7525c88">
+  <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="assets/img/favicon-48.png" sizes="48x48" type="image/png">
+  <link rel="apple-touch-icon" href="assets/img/apple-touch-icon.png">
+  <style>
+    .gate { min-height: 100svh; display: grid; grid-template-rows: 1fr auto; }
+    .gate__main { display: grid; align-content: center; justify-items: start; padding-top: calc(var(--nav-h) + 48px); padding-bottom: 48px; }
+    .gate__title { margin-top: 20px; font-weight: 600; font-size: clamp(44px, 9vw, 120px); line-height: .9; letter-spacing: -0.05em; }
+    .gate__text { margin-top: 24px; max-width: 42ch; color: var(--ash); font-size: clamp(15px, 1.3vw, 18px); }
+    .gate__form { width: 100%; margin-top: 32px; display: flex; flex-wrap: wrap; gap: 12px; max-width: 640px; }
+    .gate__input {
+      flex: 1 1 280px; min-width: 0; min-height: 52px; padding: 0 18px;
+      font: inherit; font-size: 16px; color: var(--chalk);
+      background: transparent; border: 1px solid var(--steel); border-radius: 999px;
+    }
+    .gate__input:focus { outline: none; border-color: var(--accent); }
+    .gate__form .btn { min-height: 52px; }
+    .gate__form .btn[disabled] { opacity: .5; cursor: progress; }
+    .gate__msg { margin-top: 14px; min-height: 1.5em; font-size: 14px; color: var(--ash); }
+    .gate__msg.is-error { color: var(--accent); }
+    .gate__msg:empty { visibility: hidden; }
+    .gate.is-loading .gate__main { opacity: .4; }
+  </style>
+</head>
+<body class="gate">
+
+<header class="nav">
+  <span class="nav__brand">Tobias Kröll</span>
+</header>
+
+<main class="gate__main wrap">
+  <span class="label">Portfolio 2026</span>
+  <h1 class="gate__title">Noch nicht öffentlich.</h1>
+  <p class="gate__text">Diese Seite ist nur mit Zugangscode sichtbar. Wenn du einen Code von mir bekommen hast, gib ihn hier ein.</p>
+  <form class="gate__form" autocomplete="off">
+    <label class="sr-only" for="code">Zugangscode</label>
+    <input class="gate__input" id="code" name="code" type="password" placeholder="Zugangscode" autocapitalize="off" autocorrect="off" spellcheck="false" required>
+    <button class="btn btn--solid" type="submit">Öffnen <span aria-hidden="true">→</span></button>
+  </form>
+  <p class="gate__msg" role="status" aria-live="polite"></p>
+</main>
+
+<footer class="footer wrap">
+  <span>© 2026 Tobias Kröll</span>
+  <a href="impressum.html">Impressum und Datenschutz</a>
+</footer>
+
+<script>
+(() => {
+  // Everything except this page and the Impressum is encrypted with AES-256-GCM.
+  // The key comes from the access code (PBKDF2-SHA256), so without the code the files stay unreadable.
+  const SALT = "042f7946d936724df1a449c17ca322b5";
+  const ITER = 600000;
+  const ENTRY = "p/28affb6730093872.bin";
+  const MAIN_JS = "main.js?v=640afccbb4";
+  const STORE = "portfolio-key";
+
+  const gate = document.body;
+  const form = document.querySelector(".gate__form");
+  const input = form.querySelector("input");
+  const button = form.querySelector("button");
+  const msg = document.querySelector(".gate__msg");
+  const bytes = (h) => new Uint8Array(h.match(/../g).map((b) => parseInt(b, 16)));
+  let key = null;
+
+  const deriveKey = async (code) => {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(code), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt: bytes(SALT), iterations: ITER, hash: "SHA-256" },
+      base, { name: "AES-GCM", length: 256 }, true, ["decrypt"]);
+  };
+
+  // Each file: 12-byte IV, then ciphertext. Plaintext: 1 byte length, MIME type, file data.
+  const fetchFile = async (path) => {
+    const res = await fetch(path);
+    if (!res.ok) throw new Error("network");
+    const data = new Uint8Array(await res.arrayBuffer());
+    const plain = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: data.subarray(0, 12) }, key, data.subarray(12)));
+    const n = plain[0];
+    return new Blob([plain.subarray(1 + n)], { type: new TextDecoder().decode(plain.subarray(1, 1 + n)) });
+  };
+
+  const urls = new Map();
+  window.decryptMedia = (path) => {
+    if (!urls.has(path)) urls.set(path, fetchFile(path).then((blob) => URL.createObjectURL(blob)));
+    return urls.get(path);
+  };
+
+  const showSite = async () => {
+    const html = await (await fetchFile(ENTRY)).text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+
+    // Images and posters are decrypted shortly before they scroll into view.
+    // Sideways swipe rows are watched as a whole, so items still off to the side get loaded too.
+    const reveal = (el) => window.decryptMedia(el.dataset.enc).then((url) => {
+      if (el.tagName === "VIDEO") el.poster = url; else el.src = url;
+    }).catch(() => {});
+    const lazy = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        lazy.unobserve(e.target);
+        (e.target.dataset.enc ? [e.target] : e.target.querySelectorAll("[data-enc]")).forEach(reveal);
+      }
+    }, { rootMargin: "1200px 0px" });
+    doc.querySelectorAll("img[src^='p/']").forEach((img) => { img.dataset.enc = img.getAttribute("src"); img.removeAttribute("src"); });
+    doc.querySelectorAll("video[poster^='p/']").forEach((v) => { v.dataset.enc = v.getAttribute("poster"); v.removeAttribute("poster"); });
+
+    document.title = doc.title;
+    gate.className = doc.body.className;
+    gate.innerHTML = doc.body.innerHTML;
+    const watched = new Set();
+    gate.querySelectorAll("[data-enc]").forEach((el) => watched.add(el.closest(".swipe") || el));
+    watched.forEach((el) => lazy.observe(el));
+
+    const script = document.createElement("script");
+    script.src = MAIN_JS;
+    document.body.append(script);
+    if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+  };
+
+  const unlock = async (code) => {
+    key = await deriveKey(code);
+    try {
+      await showSite();
+    } catch (err) {
+      key = null;
+      throw err;
+    }
+    try {
+      const raw = await crypto.subtle.exportKey("raw", key);
+      sessionStorage.setItem(STORE, btoa(String.fromCharCode(...new Uint8Array(raw))));
+    } catch {}
+  };
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const code = input.value.trim().toLowerCase();
+    if (!code) return;
+    button.disabled = true;
+    msg.className = "gate__msg";
+    msg.textContent = "Code wird geprüft …";
+    gate.classList.add("is-loading");
+    try {
+      await unlock(code);
+    } catch (err) {
+      gate.classList.remove("is-loading");
+      button.disabled = false;
+      msg.className = "gate__msg is-error";
+      msg.textContent = err.message === "network"
+        ? "Die Seite konnte nicht geladen werden. Bitte versuch es gleich noch einmal."
+        : "Der Code stimmt nicht.";
+      input.select();
+    }
+  });
+
+  // Same browser tab: the code is remembered until the tab is closed
+  (async () => {
+    let saved = null;
+    try { saved = sessionStorage.getItem(STORE); } catch {}
+    if (!window.crypto?.subtle) {
+      button.disabled = true;
+      msg.className = "gate__msg is-error";
+      msg.textContent = "Dein Browser unterstützt die Entschlüsselung nicht. Bitte öffne die Seite über https:// in einem aktuellen Browser.";
+      return;
+    }
+    if (!saved) { input.focus(); return; }
+    try {
+      key = await crypto.subtle.importKey("raw", Uint8Array.from(atob(saved), (c) => c.charCodeAt(0)), "AES-GCM", false, ["decrypt"]);
+      await showSite();
+    } catch {
+      key = null;
+      try { sessionStorage.removeItem(STORE); } catch {}
+      input.focus();
+    }
+  })();
+})();
+</script>
+</body>
+</html>
